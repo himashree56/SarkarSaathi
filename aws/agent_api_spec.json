@@ -1,0 +1,154 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "SarkarSaathi Agent Tools",
+        "description": "API for SarkarSaathi Bedrock Agent to interact with schemes, profiles, and sessions.",
+        "version": "1.0.0"
+    },
+    "paths": {
+        "/extract_profile": {
+            "post": {
+                "description": "Extract user profile details (age, gender, state, etc.) from natural language text.",
+                "operationId": "extractProfile",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string",
+                                        "description": "The user's message to extract information from."
+                                    },
+                                    "current_profile": {
+                                        "type": "object",
+                                        "description": "The existing profile data to merge with."
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successfully extracted and merged profile.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "profile": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/get_schemes": {
+            "post": {
+                "description": "Retrieve matching government schemes based on a user profile.",
+                "operationId": "getSchemes",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "profile": {
+                                        "type": "object",
+                                        "description": "The user profile to match against schemes."
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "List of matching schemes.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "schemes": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object"
+                                            }
+                                        },
+                                        "recommended_id": {
+                                            "type": "string"
+                                        },
+                                        "summary": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/manage_session": {
+            "post": {
+                "description": "Save or update the chat session state including profile, history, and recommendations.",
+                "operationId": "manageSession",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "session_id": {
+                                        "type": "string"
+                                    },
+                                    "profile": {
+                                        "type": "object"
+                                    },
+                                    "history": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object"
+                                        }
+                                    },
+                                    "summary": {
+                                        "type": "string"
+                                    },
+                                    "recommended_id": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Session updated successfully.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

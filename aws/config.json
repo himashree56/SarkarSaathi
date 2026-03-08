@@ -1,0 +1,18 @@
+{
+    "region":  "us-east-1",
+    "role_arn":  "arn:aws:iam::432054514903:role/sarkarsaathi-lambda-role",
+    "lambda_bucket":  "sarkarsaathi-lambda-y6wu56",
+    "data_bucket":  "sarkarsaathi-lambda-y6wu56",
+    "schemes_key":  "data/schemes.json",
+    "lambda_function":  "sarkarsaathi-api",
+    "api_name":  "sarkarsaathi-api-gw",
+    "secret_name":  "sarkarsaathi/config",
+    "tables":  {
+                   "sessions":  "ss-sessions",
+                   "cache":  "ss-cache"
+               },
+    "cloudfront_url":  "https://d1n5qc1s7kbyvb.cloudfront.net",
+    "cognito_pool_id":  "us-east-1_9dO7yRLiC",
+    "cognito_client_id":  "3r2hapoafkq91g6b44gaa8m3l",
+    "api_url":  "https://l83kehcc99.execute-api.us-east-1.amazonaws.com/prod"
+}
