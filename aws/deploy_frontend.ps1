@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $REGION = "us-east-1"
 $PYTHON = ".\venv\Scripts\python.exe"
 $AWS = "$PYTHON -m awscli"
-$BUCKET_NAME = "sarkarsaathi-frontend"
+$BUCKET_NAME = "sarkarsaathi-frontend-ui"
 
 Write-Host "SarkarSaathi - Frontend Deployment"
 Write-Host "================================================"
@@ -56,7 +56,10 @@ Write-Host "S3 Public Access Ready"
 
 # Step 3: Upload files
 Write-Host "[3] Uploading files..."
-Invoke-Expression "$AWS s3 sync `"frontend/dist/`" `"s3://$BUCKET_NAME/`" --delete --region $REGION"
+# Sync JS/CSS assets with cache (1 year)
+Invoke-Expression "$AWS s3 sync `"frontend/dist/assets/`" `"s3://$BUCKET_NAME/assets/`" --delete --cache-control max-age=31536000,public --region $REGION"
+# Sync everything else (like index.html) with NO CACHE
+Invoke-Expression "$AWS s3 sync `"frontend/dist/`" `"s3://$BUCKET_NAME/`" --delete --exclude `"assets/*`" --cache-control no-cache,no-store,must-revalidate --region $REGION"
 Write-Host "Upload complete"
 
 # Step 4: CloudFront

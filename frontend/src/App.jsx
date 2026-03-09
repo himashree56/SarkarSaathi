@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import './index.css'
+import './components.css'
 import QueryInput from './components/QueryInput'
 import ProfileCard from './components/ProfileCard'
 import SchemeCard from './components/SchemeCard'
@@ -7,6 +8,8 @@ import Auth, { AuthStatus } from './components/Auth'
 import HistorySidebar from './components/HistorySidebar'
 import ChatWindow from './components/ChatWindow'
 import ResultsDashboard from './components/ResultsDashboard'
+import ConsentBanner from './components/ConsentBanner'
+import OperatorDashboard from './pages/OperatorDashboard'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const COGNITO_URL = `https://cognito-idp.${import.meta.env.VITE_REGION || 'us-east-1'}.amazonaws.com/`
@@ -40,6 +43,15 @@ export default function App() {
   function toggleChat() {
     setChatOpen(o => !o)
     if (!chatOpen) setIsSidebarOpen(false) // close history sidebar when chat opens
+  }
+
+  const [consentGiven, setConsentGiven] = useState(() => {
+    return localStorage.getItem('ss_consent') === 'true'
+  })
+
+  function handleConsent(given) {
+    setConsentGiven(given)
+    localStorage.setItem('ss_consent', String(given))
   }
 
   // History dashboard — stores the loaded session data when user clicks a history item
@@ -81,7 +93,10 @@ export default function App() {
           })
         } catch { return } // refresh failed — user needs to re-login
       }
-      if (res.ok) setHistory(await res.json())
+      if (res.ok) {
+        const data = await res.json()
+        setHistory(Array.isArray(data) ? data : (data.sessions || []))
+      }
     } catch { /* silent */ }
   }
 
@@ -98,6 +113,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json()
         setDashboardSession(data)
+        setResult(data) // Sync Copilot with loaded session
       } else {
         // Fallback: old re-query approach
         handleSubmit(item.last_query, item.session_id)
@@ -107,6 +123,27 @@ export default function App() {
     } finally {
       setDashboardLoading(false)
     }
+  }
+
+  // ── Polling for regional translations ──────────────────────────
+  async function pollTranslations(sid, lang) {
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
+      if (attempts > 15) { clearInterval(interval); return; }
+      try {
+        const res = await fetch(`${API_BASE}/session/${sid}`);
+        if (res.ok) {
+          const data = await res.json();
+          const names = data.schemes?.map(s => s.name).join('') || '';
+          const hasRegional = /[\u0900-\u0DFF]/.test(names);
+          if (hasRegional || lang === 'en') {
+            setResult(data);
+            clearInterval(interval);
+          }
+        }
+      } catch { /* silent */ }
+    }, 3000);
   }
 
   // ── Normal query submit ───────────────────────────────────────
@@ -123,12 +160,17 @@ export default function App() {
           'Content-Type': 'application/json',
           ...(user ? { Authorization: `Bearer ${user.accessToken}` } : {}),
         },
-        body: JSON.stringify({ query: text, lang: selectedLang, session_id: sessionId }),
+        body: JSON.stringify({ query: text, lang: selectedLang, session_id: sessionId, known_profile: { consent_given: !!user } }),
       })
       if (!res.ok) throw new Error(`Server error: ${res.status}`)
       const data = await res.json()
       setResult(data)
-      if (data.session_id) localStorage.setItem('session_id', data.session_id)
+      if (data.session_id) {
+        localStorage.setItem('session_id', data.session_id)
+        if (selectedLang !== 'en' && data.message?.includes('in progress')) {
+          pollTranslations(data.session_id, selectedLang)
+        }
+      }
       if (user) fetchHistory()
     } catch (e) {
       setError(e.message || 'Connection failed.')
@@ -182,8 +224,11 @@ export default function App() {
     )
   }
 
-  // ── Main app ─────────────────────────────────────────────────
   const showDashboard = !!dashboardSession
+
+  if (user?.role === 'operator') {
+    return <OperatorDashboard user={user} onLogout={handleLogout} />
+  }
 
   return (
     <div className={`app has-sidebar ${chatOpen ? 'chat-is-open' : ''}`}>
@@ -268,6 +313,9 @@ export default function App() {
 
               <QueryInput query={query} setQuery={setQuery} onSubmit={handleSubmit} loading={loading} voiceLang={selectedLang} />
 
+              {/* Show the Mandatory Popup Modal if Consent is missing */}
+              {!consentGiven && <ConsentBanner onConsent={handleConsent} lang={selectedLang} />}
+
               {dashboardLoading && (
                 <div className="loading-session">
                   <div className="spinner" />
@@ -301,7 +349,7 @@ export default function App() {
             user={user}
             selectedLang={selectedLang}
             onClose={() => setChatOpen(false)}
-            initialProfile={result?.profile || null}
+            initialProfile={result?.profile || { consent_given: consentGiven }}
             initialSessionId={result?.session_id || null}
             initialSchemes={result?.schemes || []}
             onSessionUpdate={setResult}

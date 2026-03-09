@@ -14,6 +14,9 @@ from extractor import extract_profile
 from matcher import load_schemes, match_schemes, get_schemes
 from database import init_db, create_session, get_session, save_session
 from routers.chat import router as chat_router
+from routers.auth import router as auth_router
+from routers.feedback import router as feedback_router
+from agent import translate_schemes_to_lang
 
 
 @asynccontextmanager
@@ -51,6 +54,8 @@ app.add_middleware(
 
 # Register routers
 app.include_router(chat_router)
+app.include_router(auth_router)
+app.include_router(feedback_router)
 
 
 @app.get("/health")
@@ -79,7 +84,7 @@ async def query_schemes(body: UserQuery):
     existing = get_session(session_id)
 
     # Extract structured profile
-    profile = extract_profile(query_text)
+    profile = extract_profile(query_text, preferred_lang=body.lang)
 
     # Merge with existing session profile if available
     if existing and existing.get("profile"):
@@ -97,6 +102,11 @@ async def query_schemes(body: UserQuery):
 
     # Match against schemes
     matched = match_schemes(profile, top_n=10)
+    
+    # Dynamically translate schemes if not English or Hindi
+    if profile.language not in ["en", "hi"]:
+        matched = translate_schemes_to_lang(matched, profile.language)
+        
     total = len(match_schemes(profile, top_n=1000))  # full count
 
     # Build response message

@@ -29,6 +29,11 @@ This document outlines the core functional and non-functional requirements for t
 - **FR-4.1**: Speech-to-Text (STT) for natural voice input in regional languages.
 - **FR-4.2**: High-quality Text-to-Speech (TTS) for reading results aloud in the native script.
 
+### 5. Session & History
+- **FR-5.1**: Persist full chat history and demographic profiles across user sessions.
+- **FR-5.2**: Enable "New Search" with automatic session ID reset for clean start.
+- **FR-5.3**: Instant switching between historical results and active chat maintaining full context.
+
 ## ⚙️ Non-Functional Requirements (NFR)
 
 ### 1. Performance
@@ -514,3 +519,53 @@ The system leverages Model Context Protocol (MCP) architecture for tool integrat
 3. WHEN error rates exceed thresholds, THE SarkarSaathi SHALL trigger alerts to system operators
 4. THE SarkarSaathi SHALL track MCP_Server availability and automatically route around unavailable servers
 5. THE SarkarSaathi SHALL provide dashboards displaying real-time system metrics and user activity patterns
+
+### Requirement 21: User Authentication and Onboarding
+
+**User Story:** As a returning user, I want to securely log in so that I don't have to re-enter my profile information every time I use the system.
+
+#### Acceptance Criteria
+
+1. THE SarkarSaathi SHALL support OTP-based authentication via mobile number.
+2. WHEN a user logs in, THE SarkarSaathi SHALL retrieve their saved User_Profile and conversation history.
+3. THE SarkarSaathi SHALL allow users to explicitly save their profile at the end of a session.
+
+### Requirement 22: Sensitive Data Consent Flow
+
+**User Story:** As a user providing sensitive information (caste, income), I want to know why it's needed and give explicit permission before the system processes it.
+
+#### Acceptance Criteria
+
+1. THE Kiro_Agent SHALL present a clear Consent Banner before asking for PII or demographic data.
+2. THE Kiro_Agent SHALL NOT record or process sensitive attributes until explicit consent is recorded via a dedicated action.
+3. WHEN a user declines consent, THE Kiro_Agent SHALL explain the limitations on scheme discovery and provide general information.
+
+### Requirement 23: Rejection Handling and Zero Matches
+
+**User Story:** As a user who is not eligible for any schemes, I want to know this clearly and be informed of general alternatives or future opportunities.
+
+#### Acceptance Criteria
+
+1. WHEN the Eligibility_Engine returns exactly 0 eligible schemes, THE Kiro_Agent SHALL clearly inform the user with empathy.
+2. THE Kiro_Agent SHALL offer general welfare advice or point to universal basic services.
+3. THE SarkarSaathi SHALL allow users to opt-in to proactive alerts when new schemes matching their profile are added.
+
+### Requirement 24: Intermediary/CSC Operator Mode
+
+**User Story:** As a CSC operator assisting multiple citizens, I want a fast, form-based interface to enter their data and view results quickly, distinct from the conversational chatbot.
+
+#### Acceptance Criteria
+
+1. THE SarkarSaathi SHALL provide a dedicated Role-Based Login for Operators.
+2. The Operator Dashboard SHALL allow rapid data entry via structured forms bypassing the conversational flow.
+3. The Operator Dashboard SHALL allow managing distinct sessions for different citizens concurrently.
+
+### Requirement 25: User Feedback Loop
+
+**User Story:** As a user receiving scheme recommendations, I want to easily report if a scheme is outdated or the recommendation seems wrong.
+
+#### Acceptance Criteria
+
+1. THE Chat_Interface and Operator Dashboard SHALL provide a UI mechanism (e.g., thumbs down / "Report Issue" button) on all scheme results.
+2. THE SarkarSaathi SHALL expose a feedback endpoint to capture user reports, categorizing them (e.g., "Outdated info", "Wrong eligibility").
+3. THE Scheme_Database SHALL flag schemes with high negative feedback rates for administrator review.

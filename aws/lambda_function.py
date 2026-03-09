@@ -35,17 +35,21 @@ SESSIONS_TABLE = os.environ.get("SESSIONS_TABLE", "ss-sessions")
 CACHE_TABLE    = os.environ.get("CACHE_TABLE",    "ss-cache")
 BEDROCK_MODEL  = os.environ.get("BEDROCK_MODEL",  "anthropic.claude-3-haiku-20240307-v1:0")
 NOVA_MODEL_ID  = os.environ.get("NOVA_MODEL_ID",  "amazon.nova-micro-v1:0")
-NOVA_MAX_TOK   = int(os.environ.get("NOVA_MAX_TOKENS", "512"))
+NOVA_MAX_TOK   = int(os.environ.get("NOVA_MAX_TOKENS", "1500"))
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL",   "meta-llama/llama-3.2-3b-instruct:free")
 CACHE_TTL_SEC  = 3600
 SESSION_TTL_SEC = 86400
 
+from botocore.config import Config
+boto_config = Config(read_timeout=15, connect_timeout=5, retries={"max_attempts": 0})
+
 # ── AWS Clients ───────────────────────────────────────────────
-s3       = boto3.client("s3",             region_name=REGION)
-dynamodb = boto3.resource("dynamodb",     region_name=REGION)
-bedrock  = boto3.client("bedrock-runtime", region_name=REGION)
-polly    = boto3.client("polly",           region_name=REGION)
+s3       = boto3.client("s3",             region_name=REGION, config=boto_config)
+dynamodb = boto3.resource("dynamodb",     region_name=REGION, config=boto_config)
+bedrock  = boto3.client("bedrock-runtime", region_name=REGION, config=boto_config)
+polly    = boto3.client("polly",           region_name=REGION, config=boto_config)
+lambda_client = boto3.client("lambda",     region_name=REGION, config=boto_config)
 
 sessions_table = dynamodb.Table(SESSIONS_TABLE)
 cache_table    = dynamodb.Table(CACHE_TABLE)
@@ -192,15 +196,18 @@ NEEDS_KEYWORDS = {
     "business_loan": ["loan","capital","udyam","ऋण","लोन","उद्यम"],
 }
 STATES = {
-    "andhra pradesh":"Andhra Pradesh","assam":"Assam","bihar":"Bihar",
-    "chhattisgarh":"Chhattisgarh","delhi":"Delhi","goa":"Goa","gujarat":"Gujarat",
-    "haryana":"Haryana","himachal pradesh":"Himachal Pradesh","jharkhand":"Jharkhand",
-    "karnataka":"Karnataka","kerala":"Kerala","madhya pradesh":"Madhya Pradesh",
-    "maharashtra":"Maharashtra","manipur":"Manipur","odisha":"Odisha","punjab":"Punjab",
-    "rajasthan":"Rajasthan","tamil nadu":"Tamil Nadu","telangana":"Telangana",
-    "uttar pradesh":"Uttar Pradesh","uttarakhand":"Uttarakhand","west bengal":"West Bengal",
-    "maharashtra":"Maharashtra", "mh":"Maharashtra", "mharashtra":"Maharashtra",
-    "up":"Uttar Pradesh","mp":"Madhya Pradesh","ap":"Andhra Pradesh",
+    "andhra pradesh":["andhra pradesh","ap","ఆంధ్ర ಪ್ರದೇಶ್","ஆந்திரா"],
+    "assam":["assam","অসম"], "bihar":["bihar","बिहार"],
+    "chhattisgarh":["chhattisgarh","छत्तीसगढ़"], "delhi":["delhi","दिल्ली"],
+    "goa":["goa","गोवा"], "gujarat":["gujarat","ગુજરાત","ગુજરાતની"],
+    "haryana":["haryana","हरियाणा"], "himachal pradesh":["himachal pradesh","हिमाचल प्रदेश"],
+    "jharkhand":["jharkhand","झारखंड"], "karnataka":["karnataka","ಕರ್ನಾಟಕ"],
+    "kerala":["kerala","കേരളം"], "madhya pradesh":["madhya pradesh","mp","मध्य प्रदेश"],
+    "maharashtra":["maharashtra","mh","महाराष्ट्र"], "manipur":["manipur","मणिपुर"],
+    "odisha":["odisha","ଓଡ଼ିଶા"], "punjab":["punjab","ਪੰਜਾਬ"],
+    "rajasthan":["rajasthan","राजस्थान"], "tamil nadu":["tamil nadu","தமிழ்நாடு","தமிழகம்"],
+    "telangana":["telangana","తెలంగాణ"], "uttar pradesh":["uttar pradesh","up","उत्तर प्रदेश"],
+    "uttarakhand":["uttarakhand","उत्तराखंड"], "west bengal":["west bengal","পশ্চিমবঙ্গ"],
 }
 
 def _match_keyword(text, kdict):
@@ -246,8 +253,12 @@ def _extract_needs(text):
 
 def _extract_state(text):
     t = text.lower()
-    for k, v in STATES.items():
-        if k in t: return v
+    for state_key, kws in STATES.items():
+        if any(kw.lower() in t for kw in kws):
+            # Special case for AP/UP etc to avoid false positives
+            if state_key in ["up", "ap", "mp"]:
+                if f" {state_key} " not in f" {t} ": continue
+            return state_key.title()
     return None
 
 def rule_based_extract(query, target_lang=None):
@@ -589,6 +600,8 @@ def get_user_id(event):
         return user["Username"] # This is the unique User ID
     except Exception as e:
         print(f"[auth] Verification failed: {e}")
+        # For expired tokens, we could try refresh token logic here
+        # For now, return None to indicate authentication failed
         return None
 
 
@@ -625,7 +638,55 @@ def generate_title(query):
         return "Chat Session"
 
 
-def save_session(session_id, profile_dict, query_text, user_id=None, title=None, history=None, summary=None, recommended_id=None):
+def handle_async_translate(event):
+    """Background task to translate schemes without blocking API Gateway."""
+    session_id = event.get("session_id")
+    target_lang = event.get("target_lang")
+    items = event.get("items")
+    
+    if not session_id or not target_lang or not items:
+        return {"status": "error", "message": "Missing params"}
+        
+    print(f"[async_translate] Starting background task for {session_id} -> {target_lang}")
+    try:
+        # VISIBILITY: Background thread emoji indicator
+        session = get_or_create_session(session_id)
+        current_title = session.get("title") or "Search Results"
+        save_session(session_id, {}, "", title=f"⚡ Translating: {current_title}...")
+
+        translated = _batch_translate(items, target_lang)
+        
+        # PERSISTENCE FIX: Ensure profile and history are dicts/lists before re-saving
+        profile = session.get("profile") or {}
+        if isinstance(profile, str):
+            try: profile = json.loads(profile)
+            except: profile = {}
+            
+        history = session.get("history") or []
+        if isinstance(history, str):
+            try: history = json.loads(history)
+            except: history = []
+            
+        save_session(
+            session_id, 
+            profile, 
+            session.get("last_query"), 
+            user_id=session.get("user_id"), 
+            title=current_title, # Restore original title
+            history=history, 
+            summary=session.get("summary"), 
+            recommended_id=session.get("recommended_id"),
+            schemes=translated
+        )
+        print(f"[async_translate] Successfully saved translated schemes for {session_id}")
+    except Exception as e:
+        print(f"[async_translate] Error: {e}")
+        # Mark error in title for debugging
+        save_session(session_id, {}, "", title=f"❌ Translation Error")
+    return {"status": "done"}
+
+
+def save_session(session_id, profile_dict, query_text, user_id=None, title=None, history=None, summary=None, recommended_id=None, schemes=None):
     """
     Non-destructively update the session. 
     Uses 'update_item' to prevent wiping out data.
@@ -655,6 +716,9 @@ def save_session(session_id, profile_dict, query_text, user_id=None, title=None,
         if recommended_id:
             expr += ", recommended_id = :rid"
             vals[":rid"] = recommended_id
+        if schemes is not None:
+            expr += ", schemes = :sc"
+            vals[":sc"] = json.dumps(schemes, default=_json_serial)
             
         sessions_table.update_item(
             Key={"session_id": session_id},
@@ -778,6 +842,10 @@ def err_response(msg, code=400):
 
 # ── Lambda handler ────────────────────────────────────────────
 def lambda_handler(event, context):
+    # Detect if this is an internal async task
+    if event.get("task_type") == "async_translate":
+        return handle_async_translate(event)
+        
     # Detect if this is a Bedrock Agent invocation
     if 'actionGroup' in event:
         return handle_agent_tools(event)
@@ -811,7 +879,14 @@ def lambda_handler(event, context):
         if not profile and not history:
             return err_response("Session not found or empty", 404)
         
-        matched = match_schemes(profile, top_n=10)
+        matched = session.get("schemes")
+        if matched:
+            if isinstance(matched, str):
+                try: matched = json.loads(matched)
+                except: matched = []
+        else:
+            # Fallback for sessions where schemes weren't cached yet
+            matched = match_schemes(profile, top_n=5)
         recommended_id = session.get("recommended_id")
         summary = session.get("summary")
 
@@ -837,22 +912,34 @@ def lambda_handler(event, context):
     # GET /history
     if path.endswith("/history") and method == "GET":
         user_id = get_user_id(event)
-        if not user_id: return err_response("Unauthorized", 401)
+        if not user_id: 
+            # Return empty history instead of 401 to allow app to continue
+            return ok_response([])
         
         try:
-            resp = sessions_table.scan(
-                FilterExpression=boto3.dynamodb.conditions.Attr("user_id").eq(user_id),
-                Limit=50
-            )
-            items = sorted(resp.get("Items", []), key=lambda x: x["updated_at"], reverse=True)
-            return ok_response(_decimal_to_native(items))
+            items = []
+            last_key = None
+            while len(items) < 20:
+                scan_args = {
+                    "FilterExpression": boto3.dynamodb.conditions.Attr("user_id").eq(user_id),
+                    "Limit": 100
+                }
+                if last_key: scan_args["ExclusiveStartKey"] = last_key
+                resp = sessions_table.scan(**scan_args)
+                items.extend(resp.get("Items", []))
+                last_key = resp.get("LastEvaluatedKey")
+                if not last_key: break
+            
+            items = sorted(items, key=lambda x: x.get("updated_at", ""), reverse=True)
+            return ok_response(_decimal_to_native(items[:20]))
         except Exception as e:
             return err_response(f"Database error: {e}")
 
     # DELETE /history/{session_id}
     if "/history/" in path and method == "DELETE":
         user_id = get_user_id(event)
-        if not user_id: return err_response("Unauthorized", 401)
+        if not user_id: 
+            return ok_response({"status": "error", "message": "Please sign in to delete history"})
         session_id = path.split("/history/")[-1]
         try:
             # Delete item only if it belongs to the user
@@ -868,7 +955,8 @@ def lambda_handler(event, context):
     # PUT /history/{session_id} (Rename)
     if "/history/" in path and method == "PUT":
         user_id = get_user_id(event)
-        if not user_id: return err_response("Unauthorized", 401)
+        if not user_id: 
+            return ok_response({"status": "error", "message": "Please sign in to rename sessions"})
         session_id = path.split("/history/")[-1]
         try:
             body = json.loads(event.get("body") or "{}")
@@ -878,10 +966,11 @@ def lambda_handler(event, context):
             sessions_table.update_item(
                 Key={"session_id": session_id},
                 UpdateExpression="SET title = :t",
+                ExpressionAttributeValues={":t": new_title, ":u": user_id},
                 ConditionExpression="user_id = :u",
-                ExpressionAttributeValues={":t": new_title, ":u": user_id}
+                ExpressionAttributeNames={"#t": "title"}
             )
-            return ok_response({"status": "renamed", "title": new_title})
+            return ok_response({"status": "renamed", "session_id": session_id, "title": new_title})
         except Exception as e:
             return err_response(f"Rename failed: {e}")
 
@@ -926,10 +1015,8 @@ def lambda_handler(event, context):
         target_lang = target_lang or "en"
         
         LANG_MAP = {
-            "english": "en", "hindi": "hi", "gujarati": "gu", "marathi": "mr",
-            "telugu": "te", "bengali": "bn", "tamil": "ta", "punjabi": "pa",
-            "kannada": "kn", "malayalam": "ml", "urdu": "ur",
-            "en": "en", "hi": "hi", "gu": "gu", "mr": "mr", "te": "te", "bn": "bn", "ta": "ta", "pa": "pa", "kn": "kn", "ml": "ml", "ur": "ur"
+            "en": "en", "hi": "hi", "gu": "gu", "mr": "mr", "te": "te", "bn": "bn", "ta": "ta", "pa": "pa", "kn": "kn", "ml": "ml", "ur": "ur",
+            "english": "en", "hindi": "hi", "gujarati": "gu", "marathi": "mr", "telugu": "te", "bengali": "bn", "tamil": "ta", "punjabi": "pa", "kannada": "kn", "malayalam": "ml", "urdu": "ur"
         }
         target_lang = LANG_MAP.get(target_lang, "en")
         
@@ -937,6 +1024,13 @@ def lambda_handler(event, context):
         
         # Profile extraction (Treat every home page search as a fresh profile)
         profile = extract_profile(query, target_lang)
+
+        # Merge with any known_profile provided by the client (e.g., auth consent)
+        known_profile = body.get("known_profile") or {}
+        if isinstance(known_profile, dict):
+            for k, v in known_profile.items():
+                if profile.get(k) is None:
+                    profile[k] = v
 
         # Ensure language is saved to profile so the UI chip is correct
         profile["language"] = target_lang
@@ -952,16 +1046,39 @@ def lambda_handler(event, context):
         if isinstance(history, str):
             try: history = json.loads(history)
             except: history = []
-        history.append({"role": "user", "content": f"I am searching for: {query}"})
+        
+        # Don't add if history already has turns (prevents repeat on refresh)
+        if not history:
+            history.append({"role": "user",      "content": query})
+            history.append({"role": "assistant", "content": f"I've analyzed your profile based on your query: '{query}'. You can see the matched schemes on the dashboard. How else can I help?"})
 
-        save_session(session["session_id"], profile, query, user_id, title, history=history[:10])
-
-        # Match schemes (Keep at 6 for speed, but ensure they are matched first)
-        matched = match_schemes(profile, top_n=6)
+        # Match schemes (Keep at 5 for speed, but ensure they are matched first)
+        matched = match_schemes(profile, top_n=5)
+        
+        save_session(session["session_id"], profile, query, user_id, title, history=history[:10], schemes=matched)
+        
         message = f"Found {len(matched)} schemes matching your profile."
         if target_lang != "en":
-            print(f"[query] Translating {len(matched)} schemes into: {target_lang}")
-            matched = _batch_translate(matched, target_lang)
+            print(f"[query] Triggering async translation for {session['session_id']} into: {target_lang}")
+            try:
+                # VISIBILITY: Initial thread emoji indicator
+                save_session(session["session_id"], profile, query, user_id, title=f"⏳ Triggering: {title or 'Results'}...", history=history[:10], schemes=matched)
+                
+                # Fire and forget secondary invocation
+                lambda_client.invoke(
+                    FunctionName="sarkarsaathi-api", # Hardcoded for safety
+                    InvocationType='Event',
+                    Payload=json.dumps({
+                        "task_type": "async_translate",
+                        "session_id": session["session_id"],
+                        "target_lang": target_lang,
+                        "items": matched
+                    }, default=_json_serial)
+                )
+                message += f" Translation to regional language is in progress..."
+            except Exception as e:
+                print(f"[query] Async trigger failed: {e}")
+
             message = translate_text(message, target_lang)
             # FORCE profile language for UI consistency
             profile["language"] = target_lang
@@ -982,8 +1099,39 @@ def lambda_handler(event, context):
         except Exception as e:
             return err_response(f"TTS failed: {e}")
 
+    # ── AUTH ROUTES ──
+    if "/auth/login" in path and method == "POST":
+        if body.get("otp") != "1234": return err_response("Invalid OTP", 401)
+        uid = str(uuid.uuid4())
+        token = f"mock_jwt_{uid}"
+        role = "operator" if body.get("is_operator") else "citizen"
+        # Save to Dynamo cache_table for persistence across Lambda invocations
+        try:
+            cache_table.put_item(Item={"cache_key": f"token_{token}", "user_id": uid, "role": role, "phone": body.get("phone_number"), "ttl": int(time.time())+86400})
+        except: pass
+        return ok_response({"token": token, "user_id": uid, "role": role})
+
+    if "/auth/me" in path and method == "GET":
+        token = event.get("queryStringParameters", {}).get("token")
+        if not token: return err_response("Unauthorized", 401)
+        try:
+            res = cache_table.get_item(Key={"cache_key": f"token_{token}"}).get("Item")
+            if not res: return err_response("Unauthorized", 401)
+            return ok_response({"user_id": res["user_id"], "role": res["role"], "phone": res.get("phone")})
+        except: return err_response("Unauthorized", 401)
+
+    # ── FEEDBACK ROUTES ──
+    if "/feedback" in path and method == "POST":
+        fb = body.copy()
+        fb["cache_key"] = f"fb_{uuid.uuid4()}"
+        fb["timestamp"] = datetime.utcnow().isoformat()
+        try: cache_table.put_item(Item=fb)
+        except: pass
+        return ok_response({"status": "success", "message": "Feedback recorded successfully."})
+
     # POST /chat  — Adaptive CoT RAG chatbot (Amazon Nova Micro)
     if path.endswith("/chat") and method == "POST":
+        start_time = time.time()
         try:
             message = (body.get("message") or "").strip()
             if not message:
@@ -996,9 +1144,8 @@ def lambda_handler(event, context):
             lang = lang or "en"
 
             LANG_MAP = {
-                "english": "en", "hindi": "hi", "gujarati": "gu", "marathi": "mr",
-                "telugu": "te", "bengali": "bn", "tamil": "ta", "punjabi": "pa",
-                "kannada": "kn", "malayalam": "ml", "urdu": "ur"
+                "en": "en", "hi": "hi", "gu": "gu", "mr": "mr", "te": "te", "bn": "bn", "ta": "ta", "pa": "pa", "kn": "kn", "ml": "ml", "ur": "ur",
+                "english": "en", "hindi": "hi", "gujarati": "gu", "marathi": "mr", "telugu": "te", "bengali": "bn", "tamil": "ta", "punjabi": "pa", "kannada": "kn", "malayalam": "ml", "urdu": "ur"
             }
             if lang.lower() in LANG_MAP: lang = LANG_MAP[lang.lower()]
             
@@ -1007,6 +1154,10 @@ def lambda_handler(event, context):
             if (not (body.get("language") or body.get("lang"))) and (not session.get("profile", {}).get("language")) and lang == "en":
                 script_lang = _detect_lang_from_script(message)
                 if script_lang: lang = script_lang
+
+            # GREETING CHECK: If message is a simple greeting, we should converse first, not dump schemes.
+            msg_lower = message.lower().strip().strip("?!.")
+            is_greeting = msg_lower in ["hi", "hello", "hey", "namaste", "namaskaram", "namaskara", "vanakkam", "pranam", "salaam", "नमस्ते", "வணக்கம்", "नमस्कार", "നമസ്കാരം", "నమస్కారం", "ನಮಸ್ಕಾರ"]
 
             # Session
             user_id    = get_user_id(event)
@@ -1026,8 +1177,13 @@ def lambda_handler(event, context):
                         last_bot_msg = turn["content"]
                         break
 
-            # Profile extraction + session merge
-            profile = extract_profile(message, lang)
+            # Profile extraction + session merge - SKIP Bedrock if message is short OR NOT English to save 8-10s
+            # (Rule-based is enough for chat flow in regional languages)
+            is_shorter = len(message) < 20
+            if is_shorter or lang != "en":
+                profile = rule_based_extract(message, lang)
+            else:
+                profile = extract_profile(message, lang)
             
             # ── Context Inference for short answers ──
             # If primary extraction missed something, try inferring from last bot question
@@ -1046,7 +1202,7 @@ def lambda_handler(event, context):
             known_profile = body.get("known_profile") or {}
             if isinstance(known_profile, dict):
                 for field in ["age","gender","marital_status","occupation","income_level",
-                              "location_type","state","caste","children","needs"]:
+                              "location_type","state","caste","children","needs","consent_given"]:
                     # FIX: Use 'is None' explicitly to avoid overwriting 0 (zero)
                     if profile.get(field) is None:
                         val = known_profile.get(field)
@@ -1064,13 +1220,20 @@ def lambda_handler(event, context):
             profile["language"] = lang
 
             save_session(session["session_id"], profile, message, user_id)
+            print(f"[chat] T+ {time.time()-start_time:.2f}s: Profile extracted")
 
             # RAG retrieval
-            matched = match_schemes(profile, top_n=10)
+            print(f"[chat] T+ {time.time()-start_time:.2f}s: Loading schemes...")
+            matched = match_schemes(profile, top_n=5)
+            print(f"[chat] T+ {time.time()-start_time:.2f}s: Schemes matched ({len(matched)})")
             
-            # Multilingual Translation for Chat Results (Translate all matches shown in dashboard)
+            # Multilingual Translation for Chat Results (Translate top 3 shown in dashboard for regional)
             if lang != "en":
-                matched = _batch_translate(matched, lang)
+                # HYPER-OPTIMIZATION: 4s strict timeout (prev 5s) to stay under 29s
+                # Also only translate top 3 to guarantee speed
+                print(f"[chat] T+ {time.time()-start_time:.2f}s: Starting Translation...")
+                matched = _batch_translate(matched[:3], lang, wait_timeout=4.0, start_time=start_time)
+                print(f"[chat] T+ {time.time()-start_time:.2f}s: Translation done (or timed out)")
 
             # (History already loaded above for context inference)
 
@@ -1078,17 +1241,17 @@ def lambda_handler(event, context):
             key_fields = ["age", "gender", "occupation", "state", "income_level", "caste"]
             known_fields = sum(1 for f in key_fields if profile.get(f))
 
-            # Short or greeting messages should never trigger a scheme dump
-            msg_lower = message.lower().strip().strip("?!.")
-            is_short = len(msg_lower) < 6
-            profile_ready = known_fields >= 3
+            # Only "profile_ready" if it's NOT a simple greeting
+            # Relaxed: If we have ANY key info, we can show basics.
+            profile_ready = (known_fields >= 1) and (not is_greeting)
 
             # Build AI response
-            ai_response = _nova_chat(message, profile, matched[:5] if profile_ready else [], history, lang)
+            ai_response = _nova_chat(message, profile, matched[:5] if profile_ready else [], history, lang, start_time=start_time)
+            print(f"[chat] T+ {time.time()-start_time:.2f}s: AI Response generated")
 
-            # Only generate summary when we have a meaningful profile
+            # Only generate summary in English (redundant for regional where time is tight)
             summary = None
-            if body.get("include_summary") and matched and profile_ready and not is_short:
+            if lang == "en" and body.get("include_summary") and matched and profile_ready and not is_short:
                 summary = _nova_summarize(profile, matched[:5], lang)
 
             # Update history (keep last 10 turns)
@@ -1111,7 +1274,7 @@ def lambda_handler(event, context):
                 "session_id": session["session_id"],
                 "response":   ai_response,
                 "summary":    summary,
-                "schemes":    matched[:5] if (matched and profile_ready and not is_short) else [],
+                "schemes":    matched[:5] if (matched and known_fields >= 1) else [],
                 "profile":    profile,
                 "language":   lang,
                 "profile_score": known_fields,
@@ -1161,9 +1324,14 @@ def _get_nova():
         _nova_client = boto3.client("bedrock-runtime", region_name=REGION)
     return _nova_client
 
-def _batch_translate(items, target_lang):
-    """Translate multiple fields in parallel chunks of 5 to prevent timeouts and improve quality."""
+def _batch_translate(items, target_lang, wait_timeout=50.0, start_time=None):
+    """Translate multiple fields in parallel chunks of 5 with global timeout safety."""
     if not items or target_lang.lower() in ["en", "english"]: return items
+    
+    # ── Global Timeout Safety ──
+    if start_time and (time.time() - start_time) > 20.0:
+        print("[batch_translate] SKIPPING: Already exceeded 20s budget")
+        return items
     LANG_NAME_MAP = {
         "hi": "Hindi", "gu": "Gujarati", "mr": "Marathi", "ta": "Tamil",
         "te": "Telugu", "bn": "Bengali", "kn": "Kannada", "ur": "Urdu",
@@ -1171,10 +1339,11 @@ def _batch_translate(items, target_lang):
     }
     lang_full = LANG_NAME_MAP.get(target_lang.lower(), target_lang)
 
-    CHUNK_SIZE = 1  # Granular parallel processing (per item)
+    CHUNK_SIZE = 5  # Batch all items into a single parallel translation wave to ensure we stay under the 30s timeout
     chunks = [items[i : i + CHUNK_SIZE] for i in range(0, len(items), CHUNK_SIZE)]
     
     def translate_chunk(chunk, start_idx):
+        import time, random
         to_translate = []
         for i, item in enumerate(chunk):
             real_idx = start_idx + i
@@ -1193,83 +1362,108 @@ def _batch_translate(items, target_lang):
             if steps: to_translate.append(f"STEPS_{real_idx}: {' | '.join(steps)}")
         
         combined_text = "\n---\n".join(to_translate)
-        # Use a more descriptive prompt and a more reliable model (Haiku) for strict formatting
-        prompt = f"""You are a professional Hindi/Regional translator. Translate the following scheme data into {lang_full}.
+        prompt = f"""You are a professional multilingual translator. Your goal is to translate Indian government scheme data into {lang_full}.
         
         FORMAT RULES:
-        1. Return a JSON OBJECT where keys are the prefixes (NAME_0, BENEFIT_0, etc.) and values are the translated text.
-        2. Translate EVERYTHING including proper names, locations, and technical terms into {lang_full}.
-        3. Do NOT add any preamble or extra text. Only return the JSON.
+        1. DO NOT RETURN JSON. RETURN PLAIN TEXT.
+        2. For each line in the data formatted as "KEY: text", output EXACTLY "KEY: translated_text".
+        3. Translate EVERYTHING in the text to {lang_full}.
+        4. For proper names (like 'Goa'), use the common transliteration in {lang_full}.
+        5. Do NOT leave any part of the text in English.
+        6. Do NOT add any preamble or extra text.
         
         Data to translate:
         {combined_text}"""
         
-        try:
-            resp = bedrock.invoke_model(
-                modelId=BEDROCK_MODEL,
-                body=json.dumps({
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 3500, "temperature": 0,
-                    "messages": [{"role": "user", "content": prompt}]
-                }),
-                contentType="application/json", accept="application/json",
-            )
-            resp_body = json.loads(resp["body"].read())
-            text = resp_body["content"][0]["text"].strip()
-            if "```" in text:
-                text = text.split("```")[1]
-                if text.startswith("json"): text = text[4:]
-            return json.loads(text.strip())
-        except Exception as e:
-            print(f"[translate_chunk] AI or Parse failed: {e}")
-            return {}
-
-    # Execute translation in parallel (max 10 threads for super fast response)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(translate_chunk, chunk, i * CHUNK_SIZE) for i, chunk in enumerate(chunks)]
-        results = [f.result() for f in futures]
-    
-    print(f"[batch_translate] Received {len(results)} prompt results.")
-    for i, res in enumerate(results):
-        print(f"[batch_translate] Chunk {i} sample (50 chars): {str(res)[:50]}")
-    
-    # Parse all results back into items
-    for translated_dict in results:
-        if not translated_dict: continue
-        
-        for key, content in translated_dict.items():
+        for attempt in range(1): # Reduced retries to 1 for speed
+            if start_time and (time.time() - start_time) > 23.0: break # Bail out if we're hitting the 29s gate
             try:
-                # Expected key format: NAME_0, BENEFIT_0
-                parts = key.split("_")
-                if len(parts) < 2: continue
-                prefix_type = parts[0].upper()
-                idx = int(parts[1])
+                resp = bedrock.invoke_model(
+                    modelId=BEDROCK_MODEL,
+                    body=json.dumps({
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": 1024, "temperature": 0.4,
+                        "messages": [{"role": "user", "content": prompt}]
+                    }),
+                    contentType="application/json", accept="application/json",
+                )
+                resp_body = json.loads(resp["body"].read())
+                text = resp_body["content"][0]["text"].strip()
                 
-                if idx >= len(items): continue
+                # Custom parse the custom delimiter format with better error handling
+                parsed_res = {}
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if ":" in line:
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            key = parts[0].strip()
+                            # Strip markdown bolding that AI might add around keys
+                            key = key.replace("**", "").replace('"', '').replace("'", "")
+                            val = parts[1].strip()
+                            # Skip empty keys or values
+                            if key and val and key.startswith(("NAME_", "BENEFIT_", "REASON_", "APPLY_", "OFFICE_", "STATE_", "CAT_", "DOCS_", "STEPS_")):
+                                parsed_res[key] = val
                 
-                if prefix_type == "NAME":
-                    items[idx]["name"] = content
-                    items[idx]["name_en"] = content
-                    # Force sync ALL regional fields to kill any lingering English
-                    items[idx]["name_hi"] = content
-                    items[idx]["name_gu"] = content
-                    items[idx]["name_kn"] = content
-                    items[idx]["name_mr"] = content
-                    items[idx]["name_ta"] = content
-                    items[idx]["name_te"] = content
-                elif prefix_type == "BENEFIT": items[idx]["benefit_description"] = content
-                elif prefix_type == "REASON": items[idx]["eligibility_reason"] = content
-                elif prefix_type == "APPLY": items[idx]["how_to_apply"] = content
-                elif prefix_type == "OFFICE": items[idx]["nodal_office"] = content
-                elif prefix_type == "STATE": items[idx]["state"] = content
-                elif prefix_type == "CAT": items[idx]["category"] = content
-                elif prefix_type == "DOCS": 
-                    items[idx]["required_documents"] = [x.strip() for x in content.replace("|", "\n").split("\n") if x.strip()]
-                elif prefix_type == "STEPS": 
-                    items[idx]["application_steps"] = [x.strip() for x in content.replace("|", "\n").split("\n") if x.strip()]
+                if len(parsed_res) > 0:
+                    return parsed_res
             except Exception as e:
-                print(f"[batch_translate] Parse error for key {key}: {e}")
-            
+                print(f"[translate_chunk] Attempt {attempt+1} failed: {e}")
+                if attempt < 3:
+                    time.sleep(0.5 + random.random() * (1.5 ** attempt))
+        return {}
+
+    # Scale concurrency: Process each item in its own task with a strict timeout
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        # Submit each scheme as a separate translation task
+        future_to_idx = {
+            executor.submit(translate_chunk, [item], i): i 
+            for i, item in enumerate(items)
+        }
+        
+        # Greedy wait: In background mode, we can wait much longer (up to Lambda 60s limit)
+        # We use 50s to be safe
+        done, not_done = concurrent.futures.wait(
+            future_to_idx.keys(), 
+            timeout=wait_timeout, 
+            return_when=concurrent.futures.ALL_COMPLETED
+        )
+        
+        for f in done:
+            try:
+                res = f.result()
+                if res:
+                    # Apply translation immediately to the items list
+                    for key, content in res.items():
+                        try:
+                            parts = key.split("_")
+                            if len(parts) >= 2:
+                                prefix_type = parts[0].upper()
+                                idx = int(parts[1])
+                                if idx < len(items):
+                                    if prefix_type == "NAME":
+                                        items[idx]["name"] = content
+                                        items[idx]["name_en"] = content
+                                        # Dynamically sync the regional field
+                                        items[idx][f"name_{target_lang.lower()}"] = content
+                                    elif prefix_type == "BENEFIT": items[idx]["benefit_description"] = content
+                                    elif prefix_type == "REASON": items[idx]["eligibility_reason"] = content
+                                    elif prefix_type == "APPLY": items[idx]["how_to_apply"] = content
+                                    elif prefix_type == "OFFICE": items[idx]["nodal_office"] = content
+                                    elif prefix_type == "STATE": items[idx]["state"] = content
+                                    elif prefix_type == "CAT": items[idx]["category"] = content
+                                    elif prefix_type == "DOCS": 
+                                        items[idx]["required_documents"] = [x.strip() for x in content.replace("|", "\n").split("\n") if x.strip()]
+                                    elif prefix_type == "STEPS": 
+                                        items[idx]["application_steps"] = [x.strip() for x in content.replace("|", "\n").split("\n") if x.strip()]
+                        except: pass
+            except: pass
+        
+        if not_done:
+            print(f"[batch_translate] {len(not_done)} translation tasks timed out after {wait_timeout}s.")
+            for f in not_done: f.cancel()
+    
     return items
 
 def _chat_converse(system_text, user_text):
@@ -1299,135 +1493,102 @@ def _chat_converse(system_text, user_text):
 
 
 
-def _nova_chat(message, profile, top_schemes, history, lang):
-    # ── Language label (injected explicitly — do NOT rely on AI to guess) ──
-    LANG_DISP = {
-        "en": "English", "hi": "Hindi", "gu": "Gujarati", "mr": "Marathi",
-        "te": "Telugu", "bn": "Bengali", "ta": "Tamil", "pa": "Punjabi",
-        "kn": "Kannada", "ml": "Malayalam", "ur": "Urdu"
-    }
-    lang_label = LANG_DISP.get(lang, "English")
-    lang_instruction = (
-        f"CRITICAL: You MUST respond in {lang_label} only. Every word of your reply must be in {lang_label}. "
-        f"If the user spoke to you in another language, you must still respond in {lang_label} if that is what is requested."
-    )
+_REACT_SYSTEM_PROMPT = """You are SarkarSaathi, a helpful Indian government scheme assistant.
+You solve tasks using a Reasoning and Acting (ReAct) loop.
 
-    # ── Detect message intent ────────────────────────────────────────────
-    msg_lower = message.lower().strip()
-    greetings = {"hi", "hello", "hey", "namaste", "namaskar", "ola", "greetings", "नमस्ते", "નમસ્તે", "வணக்கம்", "నమస్కారం", "ನಮಸ್ಕಾರ"}
-    is_greeting = msg_lower in greetings or len(msg_lower) < 4
-    
-    # Check if user is asking a specific question (not a greeting, not a simple one-word reply)
-    question_keywords = ["tell me", "what is", "explain", "about", "how to", "how do", "who", 
-                         "when", "where", "apply", "eligib", "benefit", "criteria", "document",
-                         "बताओ", "क्या है", "कैसे", "कहाँ", "कैसे करें"]
-    is_direct_question = any(kw in msg_lower for kw in question_keywords)
+You have access to the following tools:
 
-    # ── RAG context ──────────────────────────────────────────────────────
-    scheme_ctx = ""
-    if top_schemes and not is_greeting:
-        lines = []
+1. ask_user(question: str): Ask the user a clarifying question or ask for their PII consent.
+2. check_eligibility(): You have already been provided the user's profile and matching schemes in the context. Use this tool when you have enough profile information (like age, income, state, caste) to give scheme recommendations to the user based on the context.
+3. record_consent(): Use this when the user explicitly agrees to share their information.
+
+You must follow this exact format:
+
+Thought: [Consider the current state, missing profile information, consent status, etc.]
+Action: [The name of the tool to use: 'ask_user', 'check_eligibility', or 'record_consent']
+Action Input: [The input string for the tool, if applicable. Leave blank if not]
+Observation: [The result of the action - this will be provided by the system]
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now have the final answer.
+Final Answer: [The final response to send to the user, strictly in the requested language (e.g. Urdu, Telugu, etc.)]
+
+CRITICAL RULES:
+- The user MUST give explicit consent before you can process their caste, income, or other sensitive data. If `consent_given` is False, your FIRST action must be to ask for their consent using `ask_user`.
+- Once they consent, use `record_consent`.
+- YOU MUST RESPOND IN THE REQUESTED LANGUAGE: {lang_full}. Even if the user asks in English, if the session language is set to {lang_full}, you MUST respond in {lang_full}.
+- If there are 0 schemes returned from `check_eligibility`, you MUST handle this gracefully in the Final Answer, empathetically telling them there are no specific schemes right now, but offering general advice.
+"""
+
+def _nova_chat(message, profile, top_schemes, history, lang, start_time=None):
+    profile_context = ""
+    if profile:
+        parts = []
+        for f in ["age", "gender", "occupation", "state", "income_level", "caste"]:
+            val = profile.get(f)
+            if val is not None and str(val) != "": parts.append(f"{f}: {val}")
+        parts.append(f"Consent Given: {profile.get('consent_given', False)}")
+        profile_context = "\n\nUser profile: " + " | ".join(parts)
+
+    scheme_context = ""
+    if top_schemes:
+        scheme_lines = []
         for i, s in enumerate(top_schemes, 1):
-            name = s.get("name_hi") if lang == "hi" else s.get("name_en") or s.get("name", "")
-            lines.append(
-                f"{i}. {name} — {s.get('benefit_description', '')} "
-                f"(Why eligible: {s.get('eligibility_reason', '')})"
-            )
-        scheme_ctx = "\n\nRelevant schemes:\n" + "\n".join(lines)
-
-    # ── Profile context: known vs missing ──────────────────────────────
-    all_fields = [("age","Age"),("gender","Gender"),("occupation","Occupation"),
-                  ("state","State"),("income_level","Income(₹/yr)"),("caste","Category"),
-                  ("children","Children"),("marital_status","Marital status")]
-    known = []
-    missing = []
-    for f, label in all_fields:
-        val = profile.get(f)
-        # FIX: Check for 0 and None explicitly
-        if val is not None and str(val) != "":
-            known.append(f"{label}: {val}")
-        else:
-            missing.append(label)
-    if profile.get("needs"):
-        known.append(f"Stated needs: {', '.join(profile['needs'])}")
-
-    profile_ctx = ""
-    if known:
-        profile_ctx  = f"\n\nALREADY KNOWN (DO NOT ASK AGAIN): {' | '.join(known)}"
-    if missing and len(missing) < 6:
-        profile_ctx += f"\n\nSTILL UNKNOWN (ask ONE of these next, in priority order): {', '.join(missing[:3])}"
-
-    # ── Conversation history ─────────────────────────────────────────────
-    hist_ctx = ""
-    is_first_turn = len(history) == 0
-    if history:
-        turns = [f"{'User' if t['role']=='user' else 'You'}: {t['content']}" for t in history[-6:]]
-        hist_ctx = "\n\nConversation so far:\n" + "\n".join(turns)
-
-    # ── Instruction suffix based on intent ──────────────────────────────
-    if is_first_turn and is_greeting:
-        if known:
-            instruction = (
-                f"\n\nInstruction: First message. You already know: {' | '.join(known[:3])}. "
-                f"Greet briefly (1 sentence), acknowledge what you know, then ask for the first missing field: {missing[0] if missing else 'any details'}. "
-                f"Reply in {lang_label}."
-            )
-        else:
-            instruction = (
-                f"\n\nInstruction: First message, no profile yet. Greet briefly, ask about occupation or age. Reply in {lang_label}."
-            )
-    elif is_direct_question:
-        # Check if user is using a reference like "it", "this", "that" or asking about details of the last mentioned scheme
-        ref_words = ["it", "this", "that", "guide me", "for it", "apply for", "how to apply", "apply this", "where", "details", "website", "link", "url"]
-        is_referential = any(r in msg_lower for r in ref_words)
-        last_bot_msg = ""
-        if is_referential and history:
-            for turn in reversed(history):
-                if turn["role"] == "assistant":
-                    last_bot_msg = turn["content"]
-                    break
-        
-        if is_referential and last_bot_msg:
-            instruction = (
-                f"\n\nInstruction: The user is asking a follow-up about what YOU just said. "
-                f"Your previous reply was: \"{last_bot_msg[:300]}\". "
-                f"Answer their question ABOUT THAT SPECIFIC TOPIC — do NOT suggest a new/different scheme yet. "
-                f"If they asked about applying, give specific steps or mentions of websites/offices. Reply in {lang_label}, max 4 sentences."
-            )
-        else:
-            instruction = (
-                f"\n\nInstruction: Answer the question directly and helpfully. "
-                f"Do NOT deflect. Focus on answering their specific query FIRST before suggesting anything else. Reply in {lang_label}, max 3 sentences."
-            )
+            # Dynamic field selection based on language 
+            name = s.get(f"name_{lang}") or s.get("name_en") or s.get("name") or "Scheme"
+            scheme_lines.append(f"{i}. {name} — {s.get('benefit_description', '')} (Why: {s.get('eligibility_reason', '')})")
+        scheme_context = "\n\nAvailable matching schemes:\n" + "\n".join(scheme_lines)
     else:
-        next_q = missing[0] if missing else None
-        if next_q:
-            instruction = (
-                f"\n\nInstruction: Acknowledge what they said naturally IN {lang_label}. "
-                f"Then ask about: {next_q}. "
-                f"If the user JUST answered a question about {next_q} but you still don't have it, assume they are talking about something else or just move to a different question (e.g. caste or state). "
-                f"NEVER repeat the same question twice in a row. Max 2 sentences. Reply strictly in {lang_label}."
-            )
-        else:
-            instruction = (
-                f"\n\nInstruction: Profile complete. Mention the most relevant scheme and WHY they qualify. "
-                f"Reply strictly in {lang_label}. Max 3 sentences."
-            )
+        scheme_context = "\n\nAvailable matching schemes: NONE (0 eligible schemes found)."
 
-    # ── Final prompt ─────────────────────────────────────────────────────
-    prompt = (
-        f"User message: {message}"
-        f"{profile_ctx}"
-        f"{scheme_ctx}"
-        f"{hist_ctx}"
-        f"{instruction}"
-        f"\n\n{lang_instruction}"
-    )
+    hist_ctx = ""
+    if history:
+        turns = [f"{'User' if t['role']=='user' else 'Assistant'}: {t['content']}" for t in history[-4:]]
+        hist_ctx = "\n\nConversation history:\n" + "\n".join(turns)
+
+    LANG_NAME_MAP = {
+        "hi": "Hindi", "gu": "Gujarati", "mr": "Marathi", "ta": "Tamil",
+        "te": "Telugu", "bn": "Bengali", "kn": "Kannada", "ur": "Urdu",
+        "ml": "Malayalam", "pa": "Punjabi", "en": "English"
+    }
+    lang_full = LANG_NAME_MAP.get(lang, "English")
+
+    # Use a conversational prompt for non-English to guarantee a natural speed-turn
+    sys_prompt = _REACT_SYSTEM_PROMPT
+    if lang != "en":
+        sys_prompt = (
+            "You are SarkarSaathi, a friendly Indian government scheme advisor. "
+            "Help the user discover and understand schemes naturally. "
+            "IMPORTANT: "
+            "1. If the user just greeted you (e.g. Namaste, Hello), DO NOT dump scheme names. Just greet them back warmly and ask how you can help. "
+            "2. If schemes are provided in the context, ONLY mention them if the user specifically asked for recommendations or if they directly answer the user's question. "
+            "3. BE CONVERSATIONAL. Don't repeat the same scheme descriptions in every turn if you've already said them. Look at the 'Conversation history' to see what you just said. "
+            "4. If the user asks about a specific state or category, focus your whole answer on that. "
+            "5. Respond strictly in the requested language."
+        )
+
+    prompt_context = f"User query: {message}{profile_context}{scheme_context}{hist_ctx}\n\nRespond in language: {lang_full}\n"
     
-    # Injected language directly into system prompt for maximum weight
-    custom_sys = f"{_CHAT_SYS}\n\nCRITICAL: YOU MUST REPLY IN {lang_label.upper()} ONLY. EVERY WORD MUST BE IN {lang_label.upper()}."
-    
-    return _chat_converse(custom_sys, prompt)
+    # HYPER-SPEED: Single turn with Haiku (much faster & reliable for multilingual)
+    try:
+        resp = bedrock.invoke_model(
+            modelId=BEDROCK_MODEL,
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": NOVA_MAX_TOK,
+                "temperature": 0.4,
+                "system": sys_prompt,
+                "messages": [{"role": "user", "content": prompt_context}]
+            }),
+            contentType="application/json", accept="application/json",
+        )
+        response = json.loads(resp["body"].read())["content"][0]["text"].strip()
+        
+        if "Final Answer:" in response:
+            return response.split("Final Answer:", 1)[1].strip()
+        return response
+    except Exception as e:
+        print(f"[_nova_chat] Haiku Speed-Turn Error: {e}")
+        return "I apologize, but I am unable to process your request at this time."
 
 
 def _nova_summarize(profile, schemes, lang):

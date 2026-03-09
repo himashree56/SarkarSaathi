@@ -1941,7 +1941,29 @@ body::before {
 
 .cp-header-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+  align-items: center;
+  padding-right: 4px;
+}
+
+.cp-lang-select {
+  padding: 4px 6px;
+  background: #1a1a24;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 0.75rem;
+  outline: none;
+  cursor: pointer;
+  height: 28px;
+  min-width: 85px;
+  z-index: 100;
+}
+
+.cp-lang-select option {
+  background: #1e1e2a;
+  color: #fff;
 }
 
 .cp-icon-btn {
@@ -2640,9 +2662,10 @@ body::before {
 }
 
 /* ══════════════════════════════════════════════════════════════
-   HISTORY DASHBOARD
+   Main Dashboard Container
 ══════════════════════════════════════════════════════════════ */
-.history-dashboard {
+.results-dashboard {
+  margin-top: 32px;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -3319,6 +3342,7 @@ body::before {
     right: 16px;
   }
 }
+
 /* History Dashboard Chat Tab */
 .hd-chat-tab {
   padding: 20px;
@@ -3396,7 +3420,10 @@ body::before {
 .hd-ai-recommendation-card::before {
   content: '';
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: radial-gradient(circle at top right, rgba(255, 112, 67, 0.1), transparent);
   pointer-events: none;
 }
@@ -3438,4 +3465,3 @@ body::before {
   margin-left: 12px;
   vertical-align: middle;
 }
-

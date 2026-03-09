@@ -39,7 +39,7 @@ export default function HistorySidebar({ history, currentSessionId, onSelect, on
                 </div>
 
                 <div className="history-list">
-                    {history.length === 0 ? (
+                    {!Array.isArray(history) || history.length === 0 ? (
                         <div className="empty-history">No previous chats</div>
                     ) : (
                         history.map((item) => (

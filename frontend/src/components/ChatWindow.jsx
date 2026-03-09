@@ -36,9 +36,17 @@ function speak(text, lang, user, onEnd) {
 /* ── STT ─────────────────────────────────────────────────────── */
 function startListening(lang, onResult, onEnd) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) return null
+    if (!SR) {
+        console.error("Speech Recognition not supported")
+        return null
+    }
     const rec = new SR()
-    rec.lang = lang === 'hi' ? 'hi-IN' : 'en-IN'
+    const sttLangMap = {
+        hi: 'hi-IN', en: 'en-IN', te: 'te-IN', ta: 'ta-IN',
+        mr: 'mr-IN', gu: 'gu-IN', kn: 'kn-IN', bn: 'bn-IN',
+        ml: 'ml-IN', ur: 'ur-PK'
+    }
+    rec.lang = sttLangMap[lang] || 'en-IN'
     rec.interimResults = false
     rec.onresult = e => onResult(e.results[0][0].transcript)
     rec.onerror = () => onEnd?.()
@@ -114,40 +122,33 @@ export default function ChatWindow({
     initialSchemes,
     onSessionUpdate
 }) {
-    // Map human readable names to ISO codes for backend
-    const LANG_MAP = {
-        'Hindi': 'hi', 'English': 'en', 'Marathi': 'mr', 'Bengali': 'bn',
-        'Tamil': 'ta', 'Telugu': 'te', 'Gujarati': 'gu', 'Kannada': 'kn',
-        'Urdu': 'ur', 'Malayalam': 'ml'
-    }
-    const lang = LANG_MAP[selectedLang] || 'en'
-
-    // Build opener greeting based on what we already know
-    const buildOpener = (profile) => {
-        if (!profile) {
-            if (lang === 'hi') return 'नमस्ते! मैं SarkarSaathi हूँ। आपकी उम्र बताइए?'
-            if (lang === 'gu') return 'નમસ્તે! હું રસરકારસાથી છું. તમારી ઉંમર કેટલી છે?'
-            return "Hi! I'm SarkarSaathi. To find the right schemes for you, may I ask — how old are you?"
+    // `selectedLang` is already the ISO code (e.g. 'hi', 'te', 'en')
+    const [localLang, setLocalLang] = useState(selectedLang || 'en')
+    useEffect(() => {
+        if (selectedLang && selectedLang !== localLang) {
+            setLocalLang(selectedLang);
         }
-        // Personalize greeting with existing profile
-        const parts = []
-        if (profile.occupation) parts.push(profile.occupation)
-        if (profile.state) parts.push(`from ${profile.state}`)
-        if (profile.age) parts.push(`aged ${profile.age}`)
+    }, [selectedLang, localLang])
+    const lang = localLang
 
-        if (lang === 'hi') {
-            return `नमस्ते! मुझे पता है कि आप ${parts.join(', ')} हैं। आपके लिए सबसे अच्छी योजनाएं खोजने के लिए क्या आप कोई और जानकारी दे सकते हैं?`
-        }
-        if (lang === 'gu') {
-            return `નમસ્તે! મારી પાસે તમારી પ્રોફાઇલ પહેલાથી જ છે. તમે યોજનાઓ વિશે શું જાણવા માંગો છો?`
-        }
-
-        const who = parts.length ? `a ${parts.join(' ')}` : 'you'
-        return `Hi! I can see you're ${who}. I already have your profile loaded! What would you like to know about the matching schemes, or do you have any questions?`
+    // Build a generic opener greeting
+    const buildOpener = () => {
+        const msgs = {
+            'hi': 'नमस्ते! मैं SarkarSaathi हूँ। मैं आपको सरकारी योजनाओं की जानकारी देने में कैसे मदद कर सकता हूँ?',
+            'gu': 'નમસ્તે! હું રસરકારસાથી છું. હું તમને સરકારી યોજનાઓ વિશે જાણવામાં કેવી રીતે મદદ કરી શકું?',
+            'te': 'నమస్కారం! నేను SarkarSaathi ని. ఈ రోజు ప్రభుత్వ పథకాలను తెలుసుకోవడంలో మరియు అర్థం చేసుకోవడంలో నేను మీకు ఎలా సహాయపడగలను?',
+            'mr': 'नमस्कार! मी SarkarSaathi आहे. आज मी तुम्हाला सरकारी योजना शोधण्यात आणि समजून घेण्यात कशी मदत करू शकेन?',
+            'bn': 'নমস্কার! আমি SarkarSaathi। আজ আমি আপনাকে কীভাবে সরকারি প্রকল্পগুলি আবিষ্কার করতে এবং বুঝতে সাহায্য করতে পারি?',
+            'ta': 'வணக்கம்! நான் SarkarSaathi. இன்று அரசாங்க திட்டங்களை கண்டறியவும் புரிந்துகொள்ளவும் நான் உங்களுக்கு எவ்வாறு உதவ முடியும்?',
+            'kn': 'ನಮಸ್ಕಾರ! ನಾನು SarkarSaathi. ಇಂದು ಸರ್ಕಾರಿ ಯೋಜನೆಗಳನ್ನು ಅನ್ವೇಷಿಸಲು ಮತ್ತು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು?',
+            'ml': 'നമസ്കാരം! ഞാൻ SarkarSaathi ആണ്. ഇന്ന് സർക്കാർ പദ്ധതികൾ കണ്ടെത്താനും മനസ്സിലാക്കാനും എനിക്ക് നിങ്ങളെ എങ്ങനെ സഹായിക്കാനാകും?',
+            'ur': 'ہیلو! میں SarkarSaathi ہوں. آج میں آپ کو سرکاری اسکیموں کو دریافت کرنے اور سمجھنے میں کس طرح مدد کرسکتا ہوں؟',
+        };
+        return msgs[lang] || "Hi! I'm SarkarSaathi. How can I help you discover and understand government schemes today?";
     }
 
     const [mode, setMode] = useState('text')
-    const [messages, setMessages] = useState([{ role: 'bot', content: buildOpener(initialProfile) }])
+    const [messages, setMessages] = useState([])
     const [input, setInput] = useState('')
     const [loading, setLoading] = useState(false)
     const [sessionId, setSessionId] = useState(initialSessionId || null)
@@ -155,6 +156,30 @@ export default function ChatWindow({
     const [summary, setSummary] = useState(null)
     const [schemesOpen, setSchemesOpen] = useState(false)
     const [summaryOpen, setSummaryOpen] = useState(false)
+
+    // SESSION SYNC: Reset copilot when user clicks a history item
+    useEffect(() => {
+        setSessionId(initialSessionId || null)
+        setSchemes(initialSchemes || [])
+        setSummary(initialProfile?.summary || null)
+
+        // Use historical messages if they exist, otherwise show default opener
+        if (initialSessionId && Array.isArray(initialProfile?.history) && initialProfile.history.length > 0) {
+            setMessages(initialProfile.history)
+        } else {
+            setMessages([{ role: 'bot', content: buildOpener() }])
+        }
+    }, [initialSessionId])
+
+    // Auto-update the opener if the user hasn't typed anything yet and changes the language
+    useEffect(() => {
+        setMessages(prev => {
+            if (prev.length === 1 && prev[0].role === 'bot') {
+                return [{ role: 'bot', content: buildOpener() }]
+            }
+            return prev
+        })
+    }, [lang])
 
     const [voiceState, setVoiceState] = useState('idle')
     const recRef = useRef(null)
@@ -303,10 +328,27 @@ export default function ChatWindow({
                             <span className="cp-header-icon">🏛️</span>
                             SarkarSaathi AI
                         </div>
-                        <div className="cp-header-sub">Powered by Claude AI</div>
+                        <div className="cp-header-sub">Powered by Claude</div>
                     </div>
                 </div>
                 <div className="cp-header-actions">
+                    <select
+                        className="cp-lang-select"
+                        value={localLang}
+                        onChange={e => setLocalLang(e.target.value)}
+                        title="Chat Language"
+                    >
+                        <option value="en">English</option>
+                        <option value="hi">हिंदी (Hindi)</option>
+                        <option value="te">తెలుగు (Telugu)</option>
+                        <option value="ta">தமிழ் (Tamil)</option>
+                        <option value="mr">मराठी (Marathi)</option>
+                        <option value="gu">ગુજરાતી (Gujarati)</option>
+                        <option value="kn">ಕನ್ನಡ (Kannada)</option>
+                        <option value="bn">বাংলা (Bengali)</option>
+                        <option value="ml">മലയാളം (Malayalam)</option>
+                        <option value="ur">اردو (Urdu)</option>
+                    </select>
                     <button className="cp-icon-btn" onClick={clearChat} title="New chat">✏</button>
                     <button className="cp-icon-btn cp-close" onClick={onClose} title="Close">✕</button>
                 </div>
@@ -319,7 +361,7 @@ export default function ChatWindow({
 
             {/* Collapsible Schemes */}
             {schemes.length > 0 && (
-                <div className={`cp - collapsible - section ${schemesOpen ? 'open' : ''} `}>
+                <div className={`cp-collapsible-section ${schemesOpen ? 'open' : ''}`}>
                     <button className="cp-section-header" onClick={() => setSchemesOpen(!schemesOpen)}>
                         <span>🎯 Top Matches ({schemes.length})</span>
                         <span>{schemesOpen ? '▲' : '▼'}</span>
@@ -356,8 +398,8 @@ export default function ChatWindow({
                 {mode === 'voice' ? (
                     <div className="cp-voice-ui">
                         <div className="cp-voice-transcript">
-                            {messages.slice(-6).map((msg, i) => (
-                                <div key={i} className={`cp - voice - line ${msg.role === 'user' ? 'vl-user' : 'vl-bot'} `}>
+                            {messages.map((msg, i) => (
+                                <div key={i} className={`cp-voice-line ${msg.role === 'user' ? 'vl-user' : 'vl-bot'}`}>
                                     <span className="vl-who">{msg.role === 'user' ? 'You' : 'AI'}:</span>
                                     <span className="vl-text">{msg.content}</span>
                                 </div>
@@ -399,7 +441,7 @@ export default function ChatWindow({
                             rows={1}
                         />
                         <div className="cp-input-actions">
-                            <button className={`cp - mic ${voiceState === 'listening' ? 'listening' : ''} `} onMouseDown={handleManualMic}>🎤</button>
+                            <button className={`cp-mic ${voiceState === 'listening' ? 'listening' : ''}`} onClick={handleManualMic}>🎤</button>
                             <button className="cp-send" onClick={() => sendMessage()} disabled={loading || !input.trim()}>{loading ? '⏳' : '↑'}</button>
                         </div>
                     </div>
@@ -414,7 +456,7 @@ export default function ChatWindow({
 function SchemePill({ scheme, rank }) {
     const [open, setOpen] = useState(false)
     return (
-        <div className={`cp - scheme - pill ${open ? 'open' : ''} `} onClick={() => setOpen(o => !o)}>
+        <div className={`cp-scheme-pill ${open ? 'open' : ''}`} onClick={() => setOpen(o => !o)}>
             <div className="cp-pill-top">
                 <span className="cp-pill-rank">#{rank}</span>
                 <span className="cp-pill-name">{scheme.name_en || scheme.name}</span>

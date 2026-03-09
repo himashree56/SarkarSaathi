@@ -68,6 +68,7 @@ def create_lambda_role() -> str:
         "arn:aws:iam::aws:policy/SecretsManagerReadWrite",
         "arn:aws:iam::aws:policy/AmazonCognitoReadOnly",
         "arn:aws:iam::aws:policy/AmazonPollyFullAccess",
+        "arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess",
     ]
     for p in policies:
         try:

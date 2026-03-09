@@ -58,7 +58,7 @@ $configProps = @{
     BEDROCK_MODEL      = "anthropic.claude-3-haiku-20240307-v1:0"
     NOVA_MODEL_ID      = "amazon.nova-micro-v1:0"
     NOVA_MAX_TOKENS    = "512"
-    OPENROUTER_API_KEY = "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"
+    OPENROUTER_API_KEY = (Get-Content "aws\openrouter_key.txt").Trim()
     OPENROUTER_MODEL   = "meta-llama/llama-3.2-3b-instruct:free"
 }
 

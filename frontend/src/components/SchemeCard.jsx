@@ -20,6 +20,25 @@ export default function SchemeCard({ scheme, rank, user, selectedLang, isAIRecom
     const t = LOCALES[langKey] || LOCALES.en
     const [expanded, setExpanded] = useState(rank <= 2 || isAIRecommended)  // auto-expand top 2 or AI choice
     const [isSpeaking, setIsSpeaking] = useState(false)
+    const [feedbackSent, setFeedbackSent] = useState(false)
+
+    async function handleFeedback(category) {
+        try {
+            await fetch(`${API_BASE}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    scheme_id: scheme.id,
+                    rating: -1,
+                    category: category,
+                    session_id: localStorage.getItem('session_id')
+                })
+            })
+            setFeedbackSent(true)
+        } catch (e) {
+            console.error(e)
+        }
+    }
 
     function toggleSpeech(e) {
         e.stopPropagation()
@@ -185,6 +204,18 @@ export default function SchemeCard({ scheme, rank, user, selectedLang, isAIRecom
                             🌐 Apply / View on myscheme.gov.in →
                         </a>
                     )}
+
+                    <div className="feedback-section" style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)', fontSize: '0.85rem' }}>
+                        {feedbackSent ? (
+                            <span style={{ color: 'var(--accent-3)' }}>✅ Thank you for your feedback!</span>
+                        ) : (
+                            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                                <span style={{ opacity: 0.8 }}>Is this information incorrect?</span>
+                                <button className="op-btn-outline" onClick={() => handleFeedback('Outdated Info')} style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}>Outdated Info</button>
+                                <button className="op-btn-outline" onClick={() => handleFeedback('Wrong Eligibility')} style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}>Wrong Match</button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
         </div>

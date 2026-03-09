@@ -9,6 +9,7 @@ class UserQuery(BaseModel):
     """Incoming query from user."""
     query: str
     session_id: Optional[str] = None
+    lang: Optional[str] = "en"
 
 
 class UserProfile(BaseModel):
@@ -24,6 +25,7 @@ class UserProfile(BaseModel):
     caste: Optional[str] = None           # general / obc / sc / st
     needs: List[str] = []                 # housing / education / health / food / ...
     language: str = "en"
+    consent_given: bool = False           # Flag for PII processing consent
 
 
 class SchemeMatch(BaseModel):

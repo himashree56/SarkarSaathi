@@ -20,10 +20,15 @@ frontend/dist/
 .env.test.local
 .env.production.local
 frontend/.env*
+aws/openrouter_key.txt
 
 # Logs
 *.log
 debug_cf.log
+lambda_logs*
+backend/out.txt
+backend/out.json
+backend/test_output.json
 
 # OS
 .DS_Store
@@ -33,3 +38,15 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/
+temp_*
+test_*
+aws/*.zip
+aws/temp_lambda.zip
+backend/routers/auth.py
+backend/routers/feedback.py
+backend/test_*.py
+invalidate.py
+poll_inval.py
+probe_*.py
+scrape_*.py
+test_*.py

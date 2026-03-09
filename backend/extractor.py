@@ -191,12 +191,12 @@ def extract_state(text: str) -> Optional[str]:
     return None
 
 
-def extract_profile(query: str) -> UserProfile:
+def extract_profile(query: str, preferred_lang: Optional[str] = None) -> UserProfile:
     """
     Main extraction function.
     Parses user query (Hindi or English) and returns a structured UserProfile.
     """
-    lang = detect_language(query)
+    lang = preferred_lang or detect_language(query)
     text = query
 
     age = extract_age(text)

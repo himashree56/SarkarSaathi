@@ -38,6 +38,7 @@ export default function Auth({ onLogin, theme, setTheme }) {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [code, setCode] = useState('');
+    const [consentChecked, setConsentChecked] = useState(false);
     const [needsVerification, setNeedsVerification] = useState(false);
     const [error, setError] = useState('');
     const [message, setMessage] = useState('');
@@ -62,11 +63,14 @@ export default function Auth({ onLogin, theme, setTheme }) {
         e.preventDefault(); setError(''); setLoading(true);
         try {
             await cognitoPost('AWSCognitoIdentityProviderService.ConfirmSignUp', {
-                ClientId: CLIENT_ID, Username: email, ConfirmationCode: code,
+                ClientId: CLIENT_ID, Username: email, ConfirmationCode: code.trim(),
             });
             setNeedsVerification(false); setIsLogin(true);
             setMessage('✅ Email verified! Please log in now.');
-        } catch (err) { setError(err.message); }
+        } catch (err) {
+            alert('Invalid OTP! Please try again. Your OTP is valid for 5 minutes.');
+            setCode('');
+        }
         finally { setLoading(false); }
     };
 
@@ -139,6 +143,14 @@ export default function Auth({ onLogin, theme, setTheme }) {
                                     <label>Password</label>
                                     <input type="password" placeholder={isLogin ? 'Your password' : 'Min 8 characters'} value={password} onChange={e => setPassword(e.target.value)} required minLength={8} />
                                 </div>
+                                {!isLogin && (
+                                    <div className="auth-field-checkbox" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginTop: '10px' }}>
+                                        <input type="checkbox" required checked={consentChecked} onChange={e => setConsentChecked(e.target.checked)} id="authConsent" style={{ marginTop: '4px' }} />
+                                        <label htmlFor="authConsent" style={{ fontSize: '0.85rem', color: '#666', lineHeight: '1.4' }}>
+                                            I consent to SarkarSaathi processing my sensitive information (such as income and caste category) strictly to match me with eligible government schemes.
+                                        </label>
+                                    </div>
+                                )}
                             </>
                         )}
                         {needsVerification && (

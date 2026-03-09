@@ -9,14 +9,12 @@ graph TD
     User((User)) -->|HTTPS| CF[Amazon CloudFront]
     CF -->|Static Assets| S3[Amazon S3]
     User -->|API Calls| APIGW[API Gateway]
+    User -->|Voice| STT[Web Speech API]
     APIGW -->|Trigger| Lambda[AWS Lambda]
     Lambda -->|Vector Search| DynamoDB[DynamoDB]
     Lambda -->|Chat Context| DynamoDB
-    Lambda -->|Extraction/Translation| Bedrock[Amazon Bedrock]
-    Lambda -->|Fallback AI| OpenRouter[OpenRouter]
-    Lambda -->|Speech Synth| Polly[Amazon Polly]
+    Lambda -->|Extraction/Transition| Bedrock[Amazon Bedrock]
     Bedrock -->|Claude 3 Haiku| Haiku[Haiku]
-    Bedrock -->|Nova Micro| Nova[Nova]
 ```
 
 ## 🧱 Component Breakdown
@@ -34,8 +32,7 @@ graph TD
 
 ### 3. AI & Natural Language Processing
 - **Amazon Bedrock**: 
-  - **Claude 3 Haiku**: Used for high-speed profile extraction and bulk translation.
-  - **Nova Micro**: Powering the conversational chatbot with Chain-of-Thought (CoT) reasoning.
+  - **Claude 3 Haiku**: Powering the core reasoning, profile extraction, and bulk translation. It provides 2-3x faster responses than larger models, essential for regional chat.
 - **Natural Language Parsing**: Robust regex-based parsers handle structured JSON output from LLMs even when formatting varies.
 
 ### 4. Data Storage & Persistence

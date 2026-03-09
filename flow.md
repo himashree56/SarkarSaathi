@@ -11,12 +11,12 @@ The search flow is triggered when a user enters their details on the landing pag
 3.  **Extraction**: 
     - Rule-based regex extracts basic facts.
     - Claude 3 Haiku performs a deeper extraction for nuanced details.
-4.  **Matching**: System identifies Top 6 schemes from the database based on the extracted profile.
-5.  **Parallel Translation**: 
-    - The results are split into parallel tasks.
+4.  **History Injection**: The initial search is automatically recorded as the first turn in the **DynamoDB Session History** to maintain context for follow-up chat.
+5.  **Matching**: System identifies Top 5 schemes from the database based on the extracted profile.
+6.  **Parallel Translation**: 
+    - Results are split into parallel tasks with a strict **4s timeout**.
     - Claude 3 Haiku translates name, benefits, and eligibility in real-time.
-    - **SYNC**: Regional name fields (`name_hi`, `name_kn`, etc.) are synchronized to prevent English leakage.
-6.  **Response**: Results are returned to the frontend for rendering.
+7.  **Response**: Results returned to frontend for rendering.
 
 ## 2. Conversational Chat Flow (`/chat`)
 
@@ -34,7 +34,15 @@ The chatbot helps users clarify their profile and understand scheme details.
 5.  **State Persistence**: Updated profile and history are saved back to DynamoDB.
 6.  **Response**: The bot replies in the user's chosen language with localized content.
 
-## 3. High-Quality Text-to-Speech Flow (`/tts`)
+## 3. Web-Speech Voice Interaction
+Used for hands-free scheme discovery in 10+ languages.
+
+1.  **Recognition**: Frontend Maps `selectedLang` to BCP-47 (e.g., `gu-IN` for Gujarati) via `STT_LANG_MAP`.
+2.  **Trigger**: Mic button uses `onClick` for high reliability across mobile and desktop.
+3.  **Transcription**: Web Speech API streams real-time text directly to the QueryInput or ChatWindow.
+4.  **Multilingual TTS**: (Conditional) Scheme details are read back via AWS Polly's **Kajal** voice for natural regional cadence.
+
+## 4. High-Quality Text-to-Speech Flow (`/tts`)
 
 Used for reading scheme details aloud in the native language.
 

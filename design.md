@@ -30,13 +30,14 @@ AI-recommended schemes feature a **Cyan outer glow** (`box-shadow: 0 0 20px rgba
 ## 🧩 Component Interaction
 
 - **Collapsible Sections**: To avoid overwhelming users, complex details are hidden behind "See details" toggles.
+- **Space Management**: The **Results Dashboard** uses a `32px` top margin to ensure search inputs and results remain distinct and logically separated.
 - **Micro-animations**: Smooth transitions (`0.3s ease`) when switching tabs or hovering over schemes.
 - **Responsive Layout**: A mobile-first approach ensuring the chatbot and scheme results are stackable on smaller screens.
 
 ## 🗣️ Voice-First UX
 The design acknowledges that many users prefer speaking over typing:
-- **Prominent Mic Icon**: Located centrally in the chat input.
-- **Visual Feedback**: Audio-visualizers or pulse animations during TTS playback to indicate activity.
+- **Prominent Mic Icon**: Located centrally in the chat input with specific BCP-47 language mapping for accuracy.
+- **Visual Feedback**: **Voice Mode** features a custom "Voice Orb" and pulse animations to signify active listening.
 
 ---
 *Designing for the next billion users.* 🏛️🖌️✨
@@ -149,12 +150,12 @@ Example plan for "What schemes am I eligible for?":
 6. Generate explainability for each scheme
 ```
 
-**Reasoning Workflow**
-- Executes plan steps sequentially or in parallel where possible
-- Maintains reasoning trace for explainability
-- Handles conditional logic (if-then-else, loops)
-- Implements retry logic with exponential backoff for failed tool calls
-- Synthesizes information from multiple sources into coherent narrative
+**Reasoning Workflow (ReAct Agent Loop)**
+- Executes plans using a Reasoning and Acting (ReAct) loop.
+- The LLM iterates through `Thought -> Action -> Observation -> Final Answer` cycles.
+- Missing information or ambiguous input naturally triggers a corrective `Thought` step (e.g., invoking an `ask_clarifying_question` tool).
+- Maintains reasoning trace for explainability.
+- Synthesizes information from multiple sources into a coherent narrative.
 
 **Tool Orchestrator**
 - Discovers available MCP servers on startup
@@ -757,10 +758,11 @@ Each component runs as a separate microservice:
 
 **Authentication & Authorization**
 
-- **User Authentication**: Optional (anonymous access allowed for basic queries)
-- **Service Authentication**: Mutual TLS between services
-- **API Keys**: For MCP server access, rotated regularly
-- **Role-Based Access**: Admin interface for scheme management requires authentication
+- **Citizen Authentication**: OTP-based login via mobile number (Cognito/JWT). Profiles and session histories are securely retained across sessions for returning users.
+- **Operator Authentication**: Role-based access for CSC intermediaries via a dedicated Operator Dashboard, allowing them to manage multiple concurrent citizen sessions.
+- **Service Authentication**: Mutual TLS between services.
+- **API Keys**: For MCP server access, rotated regularly.
+- **Explicit Consent**: The system implements a hard barrier requiring documented user consent via the UI before sensitive PII (like caste or income) is ingested by the Agent or processed.
 
 **Compliance**
 
